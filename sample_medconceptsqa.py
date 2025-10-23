@@ -819,78 +819,6 @@ def save_sampling_plan(plan: Dict, output_path: Path, logger: Logger):
         raise
 
 
-def add_hierarchy_descriptions(
-    data_list: List[Dict],
-    vocab_map: InnerMap,
-    logger: Logger,
-) -> List[Dict]:
-    """Add hierarchy code and description columns to each data example."""
-    enriched_data = []
-
-    for item in data_list:
-        # Create enriched copy
-        enriched = dict(item)
-
-        # Extract hierarchy codes (already present from decomposition)
-        chapter_code = enriched.get("chapter")
-        category_code = enriched.get("category")
-        subcategory_code = enriched.get("subcategory")
-        full_code = enriched.get("full_code")
-
-        # Add description columns using PyHealth lookup
-        try:
-            if chapter_code:
-                enriched["chapter_code"] = chapter_code
-                enriched["chapter_description"] = (
-                    vocab_map.lookup(chapter_code)
-                    if chapter_code in vocab_map.graph
-                    else "N/A"
-                )
-            else:
-                enriched["chapter_code"] = None
-                enriched["chapter_description"] = None
-
-            if category_code:
-                enriched["category_code"] = category_code
-                enriched["category_description"] = (
-                    vocab_map.lookup(category_code)
-                    if category_code in vocab_map.graph
-                    else "N/A"
-                )
-            else:
-                enriched["category_code"] = None
-                enriched["category_description"] = None
-
-            if subcategory_code:
-                enriched["subcategory_code"] = subcategory_code
-                enriched["subcategory_description"] = (
-                    vocab_map.lookup(subcategory_code)
-                    if subcategory_code in vocab_map.graph
-                    else "N/A"
-                )
-            else:
-                enriched["subcategory_code"] = None
-                enriched["subcategory_description"] = None
-
-            if full_code:
-                enriched["full_code_code"] = full_code
-                enriched["full_code_description"] = (
-                    vocab_map.lookup(full_code)
-                    if full_code in vocab_map.graph
-                    else "N/A"
-                )
-            else:
-                enriched["full_code_code"] = None
-                enriched["full_code_description"] = None
-
-        except Exception as e:
-            logger.warning(f"Failed to lookup description for code: {e}")
-
-        enriched_data.append(enriched)
-
-    return enriched_data
-
-
 def create_dataset_from_plan(
     plan: Dict,
     sampling_results: Dict,
@@ -898,7 +826,7 @@ def create_dataset_from_plan(
     vocab_map: InnerMap,
     logger: Logger,
 ) -> DatasetDict:
-    """Create HuggingFace DatasetDict from sampling results with hierarchy descriptions."""
+    """Create HuggingFace DatasetDict from sampling results (original MedConceptsQA columns only)."""
     logger.subsection("PHASE 5: DATASET CREATION")
     logger.info("Creating HuggingFace dataset from sampling plan...")
 
@@ -908,23 +836,15 @@ def create_dataset_from_plan(
         config_name = f"{vocab.lower()}_{difficulty}"
         sampled_questions = sampling_results[difficulty]["sampled_questions"]
 
-        # Extract original data and add hierarchy descriptions
+        # Extract only original MedConceptsQA data (no hierarchy columns)
         data_list = []
         for q in sampled_questions:
-            data_item = dict(q["original_data"])  # Copy original fields
-            # Add hierarchy codes
-            data_item["chapter"] = q["chapter"]
-            data_item["category"] = q["category"]
-            data_item["subcategory"] = q["subcategory"]
-            data_item["full_code"] = q["full_code"]
+            data_item = dict(q["original_data"])  # Copy only original fields
             data_list.append(data_item)
 
-        # Add hierarchy descriptions
-        enriched_data = add_hierarchy_descriptions(data_list, vocab_map, logger)
-
         # Create HuggingFace Dataset
-        dataset_splits[config_name] = Dataset.from_list(enriched_data)
-        logger.info(f"  ✓ {config_name}: {len(enriched_data):,} samples")
+        dataset_splits[config_name] = Dataset.from_list(data_list)
+        logger.info(f"  ✓ {config_name}: {len(data_list):,} samples")
 
     dataset_dict = DatasetDict(dataset_splits)
 

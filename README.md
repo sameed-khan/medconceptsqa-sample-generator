@@ -277,12 +277,7 @@ print(dataset)
 #     icd10cm_easy: Dataset({
 #         features: ['question_id', 'question', 'answer', 'answer_id',
 #                    'option1', 'option2', 'option3', 'option4',
-#                    'vocab', 'level',
-#                    'chapter', 'category', 'subcategory', 'full_code',
-#                    'chapter_code', 'chapter_description',
-#                    'category_code', 'category_description',
-#                    'subcategory_code', 'subcategory_description',
-#                    'full_code_code', 'full_code_description'],
+#                    'vocab', 'level'],
 #         num_rows: 5000
 #     }),
 #     icd10cm_medium: Dataset({...}),
@@ -294,37 +289,30 @@ example = dataset["icd10cm_easy"][0]
 print(example["question"])
 # "What is the description of the medical code S02.0XXA in ICD-10-CM?"
 
-print(example["category_code"])  # "S02"
-print(example["category_description"])  # "Fracture of skull and facial bones"
-print(example["subcategory_code"])  # "S02.0"
-print(example["subcategory_description"])  # "Fracture of vault of skull"
+print(example["answer"])
+# "Fracture of vault of skull, initial encounter for closed fracture"
 ```
 
-### Dataset Output Example
+### Dataset Columns
 
-In addition to importing all columns from MedConceptsQA, 
-this dataset also adds columns with the text description of each hierarchy
-level in the ICD9 and ICD10 classification systems.
+The sampled dataset contains the same columns as the original MedConceptsQA dataset:
 
-| Column | Example Value |
-|--------|---------------|
-| `chapter` | "S" |
-| `chapter_code` | "S" |
-| `chapter_description` | "Injury, poisoning and certain other consequences of external causes" |
-| `category` | "S02" |
-| `category_code` | "S02" |
-| `category_description` | "Fracture of skull and facial bones" |
-| `subcategory` | "S02.0" |
-| `subcategory_code` | "S02.0" |
-| `subcategory_description` | "Fracture of vault of skull" |
-| `full_code` | "S02.0XXA" |
-| `full_code_code` | "S02.0XXA" |
-| `full_code_description` | "Fracture of vault of skull, initial encounter for closed fracture" |
+| Column | Description | Example Value |
+|--------|-------------|---------------|
+| `question_id` | Unique identifier for the question | 12345 |
+| `question` | The question text | "What is the description of the medical code S02.0XXA in ICD-10-CM?" |
+| `answer` | The correct answer | "Fracture of vault of skull, initial encounter for closed fracture" |
+| `answer_id` | Index of the correct answer (0-3) | 2 |
+| `option1` | First answer option | "..." |
+| `option2` | Second answer option | "..." |
+| `option3` | Third answer option | "..." |
+| `option4` | Fourth answer option | "..." |
+| `vocab` | Vocabulary system | "ICD-10-CM" |
+| `level` | Difficulty level | "easy" |
 
-These descriptions come from PyHealth's ICD code lookup and are useful for:
-- Human review of sampled codes
-- Filtering by medical domain (e.g., all "fracture" codes)
-- Analyzing coverage by medical specialty
+**Note:** The sampling algorithm uses ICD hierarchy codes internally (chapter, category, subcategory, full_code)
+to maximize coverage, but these hierarchy columns are **not** included in the final dataset output.
+Only the original MedConceptsQA columns are preserved.
 
 ### 2. Sampling Plan JSON (`{output_name}_plan.json`)
 
