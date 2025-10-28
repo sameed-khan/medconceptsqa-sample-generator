@@ -491,55 +491,99 @@ See `USAGE.md` for comprehensive documentation with more examples.
 - Full_code level has every code appearing once, making stratification less meaningful
 - Requires internet connection for first run (downloads MedConceptsQA)
 
-### Final Project Status
+### Current Project Status (October 28, 2025)
 
-**✅ COMPLETE AND PRODUCTION-READY**
+**Status**: ✅ COMPLETE - Dataset Structure Refactoring
 
-All phases successfully completed:
-1. ✅ Environment setup with uv package manager
-2. ✅ 8 comprehensive pre-specification investigations
-3. ✅ Full implementation (733-line script with CLI)
-4. ✅ Three rounds of testing (600, 300, 300 samples)
-5. ✅ Edge case validation (sparse strata, small quotas)
-6. ✅ Comprehensive documentation (USAGE.md)
-7. ✅ Data integrity verification
-8. ✅ Output format validation
+**Previous Completion**: V2 optimized sampling script was fully tested and validated.
 
-**What Was Built:**
-- Production-ready Python script for hierarchical stratified sampling
-- Two-phase sampling algorithm (minimum coverage + proportional)
-- CLI with 8 parameters and full validation
-- Support for 4 hierarchy levels (chapter, category, subcategory, full_code)
-- Pydantic models for type safety
-- Comprehensive error handling and warnings
-- Multiple output formats (HuggingFace DatasetDict, JSON plan, TXT report)
-- Plan-only and load-plan modes for flexibility
-- Reproducible sampling with seed support
+**Completed Requirements:**
+1. ✅ Added "all" subset that combines easy, medium, hard
+2. ✅ Added dev/test splits to each subset
+   - test split: sampled data from hierarchical algorithm
+   - dev split: filtered from source MedConceptsQA dev split (ICD10CM only)
+3. ✅ Updated report to show "ALL" coverage statistics (replaced "AGGREGATE")
+4. ✅ Created helper script generator for pushing to HuggingFace Hub
 
-**Quality Assurance:**
-- Zero errors across all test scenarios
-- Warning system validated (sparse strata handling)
-- Data integrity confirmed (no duplicates, correct codes)
-- Edge cases handled gracefully
-- Performance validated (~18 seconds regardless of quota)
-- All investigation findings incorporated
+**Implementation Details:**
 
-**Ready for:**
-- RL training dataset creation
-- Fine-tuning dataset creation
-- Research benchmarking
-- Any quota size from 50 to tens of thousands
+**New Functions Added:**
+1. `load_dev_splits()` - Loads and filters dev split from MedConceptsQA 'all' config
+   - Filters for specified vocabulary (ICD10CM or ICD9CM)
+   - Splits by difficulty level (easy, medium, hard)
+   - Returns dict mapping difficulty to Dataset
 
-**Next Users Should:**
-1. Read `USAGE.md` for comprehensive usage guide
-2. Start with recommended configuration:
-   ```bash
-   uv run python sample_medconceptsqa.py \
-     --hierarchy-level category \
-     --size-quota-per-difficulty 2000 \
-     --output-name medconceptsqa_12k \
-     --seed 42
-   ```
-3. Adjust parameters based on needs (see USAGE.md examples)
+2. `generate_hub_upload_script()` - Generates standalone upload_to_hub.py script
+   - Creates Python script specific to dataset name
+   - Handles token via HF_TOKEN environment variable
+   - Uploads all configs with dev/test splits
+   - Includes error handling and progress tracking
 
-The project is complete, tested, documented, and ready for immediate use.
+**Modified Functions:**
+1. `create_dataset_from_plan()` - Complete restructure
+   - Now creates separate folders for each config (icd10cm_easy, icd10cm_medium, icd10cm_hard, all)
+   - Each config folder contains DatasetDict with "dev" and "test" splits
+   - "all" config created by concatenating all difficulty test/dev splits
+   - Saves each config to disk automatically
+
+2. `save_report()` - Updated coverage section
+   - Changed "AGGREGATE COVERAGE" to "ALL (combined across all difficulties)"
+   - Statistics calculation remains the same (union of codes across difficulties)
+
+3. `main()` - Integration updates
+   - Added call to `load_dev_splits()` after loading test data
+   - Updated `create_dataset_from_plan()` call with dev_splits and output_dir params
+   - Added call to `generate_hub_upload_script()` after dataset creation
+   - Removed old `dataset.save_to_disk()` call (now handled inside create_dataset_from_plan)
+
+**Output Structure:**
+```
+medconceptsqa-sample_{output_name}/
+├── icd10cm_easy/
+│   ├── dataset_dict.json
+│   ├── dev/ (4 examples)
+│   └── test/ (sampled examples)
+├── icd10cm_medium/
+│   ├── dataset_dict.json
+│   ├── dev/ (4 examples)
+│   └── test/ (sampled examples)
+├── icd10cm_hard/
+│   ├── dataset_dict.json
+│   ├── dev/ (4 examples)
+│   └── test/ (sampled examples)
+├── all/
+│   ├── dataset_dict.json
+│   ├── dev/ (12 examples = 4+4+4)
+│   └── test/ (all sampled examples concatenated)
+├── {output_name}_plan.json
+├── {output_name}_report.txt
+└── upload_to_hub.py (executable)
+```
+
+**Testing Results:**
+- Tested with small sample (300 examples, 100 per difficulty)
+- All 4 configs created successfully with dev/test splits
+- Correct example counts: Easy/Medium/Hard (4 dev + 100 test), All (12 dev + 300 test)
+- Report shows "ALL" coverage correctly
+- upload_to_hub.py script generated successfully
+- All datasets load correctly with `load_from_disk()`
+
+**Usage Example:**
+```bash
+# Generate dataset with new structure
+uv run python sample_medconceptsqa.py \
+  --size-quota 15000 \
+  --vocab ICD10CM \
+  --output-name my_dataset \
+  --seed 42
+
+# Upload to HuggingFace Hub
+cd medconceptsqa-sample_my_dataset
+export HF_TOKEN='your_token_here'
+python upload_to_hub.py --repo-name username/dataset-name
+```
+
+**Files Modified:**
+- ✅ sample_medconceptsqa.py (added 2 functions, modified 3 functions)
+- ⏳ USAGE.md (needs update - TODO for next session)
+- ✅ CLAUDE.md (this file - updated)

@@ -14,12 +14,14 @@ of the ICD-9 or ICD-10 hierarchy for any sample size that the user passes in.
 - **No Duplicate Subcategories**: Ensures maximum diversity by never sampling the same subcategory twice
 - **Hierarchy-Aware**: Optimizes coverage across chapters → categories → subcategories → full codes
 - **Single Vocabulary Focus**: Sample from either ICD-9-CM or ICD-10-CM (default: ICD-10-CM)
-- **Enriched Output**: Adds human-readable descriptions for each hierarchy level
+- **Dev/Test Splits**: Includes dev splits from original MedConceptsQA for validation
+- **Multiple Configs**: Creates 4 subsets (easy, medium, hard, all) mirroring MedConceptsQA structure
+- **Hub-Ready**: Auto-generates upload script for easy publishing to HuggingFace Hub
 - **Reproducible**: Seed-based sampling for identical results
 
 ## Quick Start
 
-This replicates the current dataset hosted on HuggingFace.
+Generate a 15,000-sample dataset from ICD-10-CM:
 ```bash
 # Sample 15,000 questions from ICD-10-CM
 uv run python sample_medconceptsqa.py \
@@ -29,13 +31,12 @@ uv run python sample_medconceptsqa.py \
   --seed 42
 ```
 
-This creates:
-- `medconceptsqa_15k/` - HuggingFace DatasetDict with 3 splits (easy/medium/hard)
+This creates a folder `medconceptsqa-sample_medconceptsqa_15k/` containing:
+- **4 dataset configs** (subsets): `icd10cm_easy/`, `icd10cm_medium/`, `icd10cm_hard/`, `all/`
+- **Each config has 2 splits**: `dev` (4-12 examples) and `test` (sampled examples)
 - `medconceptsqa_15k_plan.json` - Detailed sampling plan with coverage statistics
 - `medconceptsqa_15k_report.txt` - Human-readable coverage report
-
-all under a folder titled `medconceptsqa-sample_medconceptsqa_15k` that enables
-easy upload to huggingface_hub.
+- `upload_to_hub.py` - Auto-generated script for uploading to HuggingFace Hub
 
 ## Command-Line Arguments
 
@@ -185,10 +186,12 @@ uv run python sample_medconceptsqa.py \
 ```
 
 **Result:**
-- 15,000 total samples (5,000 per difficulty)
-- Maximum subcategory diversity
-- All 26 chapters covered
+- 4 configs: `icd10cm_easy`, `icd10cm_medium`, `icd10cm_hard`, `all`
+- 15,000 total test samples (5,000 per difficulty) + 12 dev samples
+- Maximum subcategory diversity across the hierarchy
+- All 26 ICD-10-CM chapters covered
 - ~25% of all subcategories covered
+- Ready to upload to HuggingFace Hub with generated script
 
 ### Example 2: Small Sample for Testing
 
@@ -200,7 +203,9 @@ uv run python sample_medconceptsqa.py \
   --seed 42
 ```
 
-**Result:** 300 samples (100 per difficulty)
+**Result:**
+- 4 configs with 300 total test samples (100 per difficulty) + 12 dev samples
+- Quick test dataset for validating pipelines
 
 ### Example 3: ICD-9-CM Legacy Dataset
 
@@ -213,8 +218,9 @@ uv run python sample_medconceptsqa.py \
 ```
 
 **Result:**
-- 6,000 samples from ICD-9-CM
-- Higher coverage percentage due to smaller hierarchy
+- 4 configs: `icd9cm_easy`, `icd9cm_medium`, `icd9cm_hard`, `all`
+- 6,000 total test samples from ICD-9-CM + 12 dev samples
+- Higher coverage percentage due to smaller ICD-9 hierarchy
 
 ### Example 4: Proportional Difficulty Split
 
@@ -264,33 +270,62 @@ Only shows final summary, no progress bars.
 
 ## Output Files
 
-### 1. Dataset Directory (`medconceptsqa-sample_{output_name}/{output_name}/`)
+### 1. Dataset Configs (`medconceptsqa-sample_{output_name}/`)
 
-HuggingFace DatasetDict with 3 splits (per difficulty):
+The script creates 4 dataset configurations (subsets), each in its own folder:
+
+```
+medconceptsqa-sample_medconceptsqa_15k/
+├── icd10cm_easy/           # Easy difficulty questions
+│   ├── dev/                # 4 dev examples
+│   └── test/               # 5,000 sampled test examples
+├── icd10cm_medium/         # Medium difficulty questions
+│   ├── dev/                # 4 dev examples
+│   └── test/               # 5,000 sampled test examples
+├── icd10cm_hard/           # Hard difficulty questions
+│   ├── dev/                # 4 dev examples
+│   └── test/               # 5,000 sampled test examples
+├── all/                    # Combined all difficulties
+│   ├── dev/                # 12 dev examples (4+4+4)
+│   └── test/               # 15,000 sampled test examples
+├── medconceptsqa_15k_plan.json
+├── medconceptsqa_15k_report.txt
+└── upload_to_hub.py
+```
+
+Each config folder contains a HuggingFace `DatasetDict` with `dev` and `test` splits:
 
 ```python
 from datasets import load_from_disk
 
-dataset = load_from_disk("medconceptsqa_15k")
+# Load a specific config
+dataset = load_from_disk("medconceptsqa-sample_medconceptsqa_15k/icd10cm_easy")
 print(dataset)
 # DatasetDict({
-#     icd10cm_easy: Dataset({
+#     dev: Dataset({
 #         features: ['question_id', 'question', 'answer', 'answer_id',
 #                    'option1', 'option2', 'option3', 'option4',
 #                    'vocab', 'level'],
-#         num_rows: 5000
+#         num_rows: 4
 #     }),
-#     icd10cm_medium: Dataset({...}),
-#     icd10cm_hard: Dataset({...})
+#     test: Dataset({
+#         features: [...same as above...],
+#         num_rows: 5000
+#     })
 # })
 
-# Access a specific example
-example = dataset["icd10cm_easy"][0]
+# Access a specific example from the test split
+example = dataset["test"][0]
 print(example["question"])
 # "What is the description of the medical code S02.0XXA in ICD-10-CM?"
 
 print(example["answer"])
 # "Fracture of vault of skull, initial encounter for closed fracture"
+
+# Load the combined "all" config
+all_dataset = load_from_disk("medconceptsqa-sample_medconceptsqa_15k/all")
+print(f"Dev examples: {len(all_dataset['dev'])}")    # 12
+print(f"Test examples: {len(all_dataset['test'])}")  # 15,000
 ```
 
 ### Dataset Columns
@@ -310,9 +345,10 @@ The sampled dataset contains the same columns as the original MedConceptsQA data
 | `vocab` | Vocabulary system | "ICD-10-CM" |
 | `level` | Difficulty level | "easy" |
 
-**Note:** The sampling algorithm uses ICD hierarchy codes internally (chapter, category, subcategory, full_code)
-to maximize coverage, but these hierarchy columns are **not** included in the final dataset output.
-Only the original MedConceptsQA columns are preserved.
+**Notes:**
+- The sampling algorithm uses ICD hierarchy codes internally (chapter, category, subcategory, full_code) to maximize coverage, but these hierarchy columns are **not** included in the final dataset output. Only the original MedConceptsQA columns are preserved.
+- **Dev splits** are sourced from the original MedConceptsQA dataset's `dev` split, filtered for the specified vocabulary (e.g., ICD10CM). Each difficulty config contains 4 dev examples, and the `all` config contains 12 dev examples (concatenated from all three difficulties).
+- **Test splits** contain the hierarchically-sampled questions generated by the max-coverage algorithm.
 
 ### 2. Sampling Plan JSON (`{output_name}_plan.json`)
 
@@ -400,7 +436,7 @@ ICD10CM:
     Subcategories: 46380
     Full codes   : 95513
 
-  AGGREGATE (across all splits):
+  ALL (combined across all difficulties):
     Chapters     : 26 / 26 (100.0%)
     Categories   : 1914 / 1914 (100.0%)
     Subcategories: 15000 / 46380 (32.8%)
@@ -428,6 +464,72 @@ ICD10CM:
 
 ================================================================================
 ```
+
+### 4. Upload Script (`upload_to_hub.py`)
+
+The script automatically generates a Python upload script for publishing to HuggingFace Hub:
+
+```bash
+# Navigate to the output directory
+cd medconceptsqa-sample_medconceptsqa_15k
+
+# Set your HuggingFace token
+export HF_TOKEN='your_token_here'
+
+# Upload to HuggingFace Hub
+python upload_to_hub.py --repo-name username/dataset-name
+
+# Optional: make the repository private
+python upload_to_hub.py --repo-name username/dataset-name --private
+```
+
+The upload script will:
+1. Upload all 4 configs (`icd10cm_easy`, `icd10cm_medium`, `icd10cm_hard`, `all`)
+2. Upload both `dev` and `test` splits for each config
+3. Show progress for each config/split combination
+4. Provide the final dataset URL
+
+**Example output:**
+```
+Uploading medconceptsqa_15k to username/dataset-name...
+Private: False
+
+Loading icd10cm_easy...
+  Uploading icd10cm_easy/dev (4 examples)...
+    ✓ Successfully uploaded icd10cm_easy/dev
+  Uploading icd10cm_easy/test (5000 examples)...
+    ✓ Successfully uploaded icd10cm_easy/test
+
+Loading icd10cm_medium...
+  Uploading icd10cm_medium/dev (4 examples)...
+    ✓ Successfully uploaded icd10cm_medium/dev
+  Uploading icd10cm_medium/test (5000 examples)...
+    ✓ Successfully uploaded icd10cm_medium/test
+
+...
+
+================================================================================
+Upload complete!
+View your dataset at: https://huggingface.co/datasets/username/dataset-name
+================================================================================
+```
+
+**Notes:**
+- The upload script requires `datasets` and `huggingface_hub` packages. These are already installed if you used `uv` to run the sampling script.
+- The generated dataset structure mirrors the original MedConceptsQA repository, making it compatible with existing code and workflows.
+- After uploading, users can load your dataset using:
+  ```python
+  from datasets import load_dataset
+
+  # Load a specific config and split
+  easy_test = load_dataset("username/dataset-name", "icd10cm_easy", split="test")
+
+  # Load all splits of a config
+  easy_data = load_dataset("username/dataset-name", "icd10cm_easy")
+
+  # Load the combined "all" config
+  all_data = load_dataset("username/dataset-name", "all")
+  ```
 
 ## Understanding ICD Hierarchy
 

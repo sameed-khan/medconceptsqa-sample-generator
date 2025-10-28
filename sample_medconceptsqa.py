@@ -179,6 +179,33 @@ def load_medconceptsqa(vocab: str, logger: Logger) -> Dict:
     return datasets
 
 
+def load_dev_splits(vocab: str, logger: Logger) -> Dict[str, Dataset]:
+    """Load dev split from MedConceptsQA and split by difficulty."""
+    logger.info("Loading dev splits from MedConceptsQA 'all' config...")
+
+    try:
+        # Load dev split from 'all' config
+        dev_data = load_dataset("ofir408/MedConceptsQA", "all", split="dev")
+
+        # Filter for specified vocabulary (e.g., 'ICD10CM')
+        vocab_filtered = dev_data.filter(lambda x: x["vocab"] == vocab)
+
+        logger.info(f"  Found {len(vocab_filtered)} {vocab} dev examples")
+
+        # Split by difficulty level
+        dev_splits = {}
+        for difficulty in ["easy", "medium", "hard"]:
+            diff_data = vocab_filtered.filter(lambda x: x["level"] == difficulty)
+            dev_splits[difficulty] = diff_data
+            logger.info(f"  • {difficulty}: {len(diff_data)} examples")
+
+        return dev_splits
+
+    except Exception as e:
+        logger.error(f"Failed to load dev splits: {e}")
+        raise
+
+
 def extract_codes(
     datasets: Dict, vocab: str, logger: Logger
 ) -> Tuple[Dict[str, List[Dict]], int]:
@@ -822,36 +849,87 @@ def save_sampling_plan(plan: Dict, output_path: Path, logger: Logger):
 def create_dataset_from_plan(
     plan: Dict,
     sampling_results: Dict,
+    dev_splits: Dict[str, Dataset],
     vocab: str,
     vocab_map: InnerMap,
+    output_dir: Path,
     logger: Logger,
-) -> DatasetDict:
-    """Create HuggingFace DatasetDict from sampling results (original MedConceptsQA columns only)."""
+) -> Dict[str, DatasetDict]:
+    """
+    Create HuggingFace DatasetDicts from sampling results with dev/test splits.
+
+    Returns a dict mapping config names to DatasetDicts, each containing dev/test splits.
+    Saves each config to a separate folder.
+    """
     logger.subsection("PHASE 5: DATASET CREATION")
-    logger.info("Creating HuggingFace dataset from sampling plan...")
+    logger.info("Creating HuggingFace datasets with dev/test splits...")
 
-    dataset_splits = {}
+    config_datasets = {}
 
+    # Create datasets for each difficulty level
     for difficulty in ["easy", "medium", "hard"]:
         config_name = f"{vocab.lower()}_{difficulty}"
         sampled_questions = sampling_results[difficulty]["sampled_questions"]
 
-        # Extract only original MedConceptsQA data (no hierarchy columns)
-        data_list = []
+        # Extract test split data (sampled questions)
+        test_data_list = []
         for q in sampled_questions:
             data_item = dict(q["original_data"])  # Copy only original fields
-            data_list.append(data_item)
+            test_data_list.append(data_item)
 
-        # Create HuggingFace Dataset
-        dataset_splits[config_name] = Dataset.from_list(data_list)
-        logger.info(f"  ✓ {config_name}: {len(data_list):,} samples")
+        test_dataset = Dataset.from_list(test_data_list)
+        dev_dataset = dev_splits[difficulty]
 
-    dataset_dict = DatasetDict(dataset_splits)
+        # Create DatasetDict with dev and test splits
+        config_dataset_dict = DatasetDict({
+            "dev": dev_dataset,
+            "test": test_dataset
+        })
 
-    total_samples = sum(len(split) for split in dataset_dict.values())
-    logger.info(f"✓ Created dataset with {total_samples:,} total samples")
+        config_datasets[config_name] = config_dataset_dict
 
-    return dataset_dict
+        logger.info(f"  ✓ {config_name}: dev={len(dev_dataset)}, test={len(test_dataset)}")
+
+    # Create "all" config by concatenating all difficulty splits
+    logger.info("\nCreating 'all' config...")
+
+    all_test_datasets = [
+        config_datasets[f"{vocab.lower()}_easy"]["test"],
+        config_datasets[f"{vocab.lower()}_medium"]["test"],
+        config_datasets[f"{vocab.lower()}_hard"]["test"]
+    ]
+
+    all_dev_datasets = [
+        config_datasets[f"{vocab.lower()}_easy"]["dev"],
+        config_datasets[f"{vocab.lower()}_medium"]["dev"],
+        config_datasets[f"{vocab.lower()}_hard"]["dev"]
+    ]
+
+    # Import concatenate_datasets
+    from datasets import concatenate_datasets
+
+    all_test = concatenate_datasets(all_test_datasets)
+    all_dev = concatenate_datasets(all_dev_datasets)
+
+    config_datasets["all"] = DatasetDict({
+        "dev": all_dev,
+        "test": all_test
+    })
+
+    logger.info(f"  ✓ all: dev={len(all_dev)}, test={len(all_test)}")
+
+    # Save each config to its own folder
+    logger.info("\nSaving datasets to disk...")
+    for config_name, dataset_dict in config_datasets.items():
+        config_path = output_dir / config_name
+        dataset_dict.save_to_disk(config_path)
+        logger.info(f"  ✓ Saved {config_name}/ ({len(dataset_dict['dev'])} dev + {len(dataset_dict['test'])} test)")
+
+    total_test_samples = sum(len(dd["test"]) for dd in config_datasets.values())
+    total_dev_samples = sum(len(dd["dev"]) for dd in config_datasets.values())
+    logger.info(f"\n✓ Created {len(config_datasets)} configs with {total_dev_samples} dev + {total_test_samples} test samples")
+
+    return config_datasets
 
 
 def save_report(
@@ -926,10 +1004,10 @@ def save_report(
     report.append(f"    Subcategories: {total_available['subcategories']}")
     report.append(f"    Full codes   : {total_available['full_codes']}")
 
-    # Aggregate coverage across all difficulties
+    # ALL coverage (combines all difficulties)
     aggregate_coverage = plan.get("aggregate_coverage", {})
     if aggregate_coverage:
-        report.append("\n  AGGREGATE COVERAGE (across all difficulties):")
+        report.append("\n  ALL (combined across all difficulties):")
         report.append(
             f"    Chapters     : {aggregate_coverage['chapters']} / {total_available['chapters']} "
             f"({aggregate_coverage['chapters'] / total_available['chapters'] * 100:.1f}%)"
@@ -976,6 +1054,147 @@ def save_report(
         f.write("\n".join(report))
 
     logger.info(f"✓ Saved report ({output_path.stat().st_size / 1024:.1f} KB)")
+
+
+def generate_hub_upload_script(
+    output_dir: Path,
+    dataset_name: str,
+    vocab: str,
+    logger: Logger,
+):
+    """Generate a standalone Python script for uploading dataset to HuggingFace Hub."""
+    logger.info(f"Generating Hub upload script...")
+
+    script_path = output_dir / "upload_to_hub.py"
+
+    vocab_lower = vocab.lower()
+    configs = [f"{vocab_lower}_easy", f"{vocab_lower}_medium", f"{vocab_lower}_hard", "all"]
+
+    script_content = f'''#!/usr/bin/env python3
+"""
+HuggingFace Hub Upload Script for {dataset_name}
+
+This script uploads the sampled MedConceptsQA dataset to HuggingFace Hub.
+It uploads each config (subset) with its dev and test splits.
+
+Usage:
+    1. Set your HuggingFace token as an environment variable:
+       export HF_TOKEN="your_token_here"
+
+    2. Run this script:
+       python upload_to_hub.py
+
+    3. Or specify a custom repo name:
+       python upload_to_hub.py --repo-name username/dataset-name
+
+Generated by sample_medconceptsqa.py
+"""
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+try:
+    from datasets import load_from_disk
+    from huggingface_hub import HfApi
+except ImportError:
+    print("Error: Required packages not found. Please install:")
+    print("  pip install datasets huggingface_hub")
+    sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Upload {dataset_name} to HuggingFace Hub"
+    )
+    parser.add_argument(
+        "--repo-name",
+        type=str,
+        required=True,
+        help="Repository name on HuggingFace Hub (e.g., username/dataset-name)",
+    )
+    parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Make the repository private",
+    )
+
+    args = parser.parse_args()
+
+    # Get HuggingFace token from environment
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+        print("Error: HF_TOKEN environment variable not set.")
+        print("Please set it with: export HF_TOKEN='your_token_here'")
+        sys.exit(1)
+
+    print(f"Uploading {dataset_name} to {{args.repo_name}}...")
+    print(f"Private: {{args.private}}")
+    print()
+
+    # Configs to upload
+    configs = {configs}
+
+    # Upload each config with its splits
+    for config_name in configs:
+        config_path = Path(__file__).parent / config_name
+
+        if not config_path.exists():
+            print(f"Warning: Config folder {{config_name}}/ not found. Skipping...")
+            continue
+
+        print(f"Loading {{config_name}}...")
+        try:
+            dataset_dict = load_from_disk(str(config_path))
+        except Exception as e:
+            print(f"Error loading {{config_name}}: {{e}}")
+            continue
+
+        # Upload each split
+        for split_name in ["dev", "test"]:
+            if split_name not in dataset_dict:
+                print(f"  Warning: Split '{{split_name}}' not found in {{config_name}}. Skipping...")
+                continue
+
+            print(f"  Uploading {{config_name}}/{{split_name}} ({{len(dataset_dict[split_name])}} examples)...")
+
+            try:
+                dataset_dict[split_name].push_to_hub(
+                    args.repo_name,
+                    config_name=config_name,
+                    split=split_name,
+                    token=hf_token,
+                    private=args.private,
+                )
+                print(f"    ✓ Successfully uploaded {{config_name}}/{{split_name}}")
+
+            except Exception as e:
+                print(f"    ✗ Error uploading {{config_name}}/{{split_name}}: {{e}}")
+                continue
+
+        print()
+
+    print("=" * 80)
+    print("Upload complete!")
+    print(f"View your dataset at: https://huggingface.co/datasets/{{args.repo_name}}")
+    print("=" * 80)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+    with open(script_path, "w") as f:
+        f.write(script_content)
+
+    # Make it executable
+    script_path.chmod(0o755)
+
+    logger.info(f"✓ Generated upload script: {script_path.name}")
+    logger.info("  To upload to HuggingFace Hub:")
+    logger.info(f"    1. export HF_TOKEN='your_token_here'")
+    logger.info(f"    2. python {script_path.name} --repo-name username/dataset-name")
 
 
 # ============================================================================
@@ -1106,6 +1325,9 @@ def main():
         datasets = load_medconceptsqa(args.vocab, logger)
         questions_by_config, failures = extract_codes(datasets, args.vocab, logger)
 
+        # Load dev splits
+        dev_splits = load_dev_splits(args.vocab, logger)
+
         # Build hierarchy mappings
         hierarchy_data = build_hierarchy_mappings(
             questions_by_config, args.vocab, logger
@@ -1132,24 +1354,28 @@ def main():
 
         # Create dataset (unless plan-only mode)
         if not args.plan_only:
-            dataset = create_dataset_from_plan(
+            config_datasets = create_dataset_from_plan(
                 plan=plan,
                 sampling_results=sampling_results,
+                dev_splits=dev_splits,
                 vocab=args.vocab,
                 vocab_map=hierarchy_data["vocabulary"],
+                output_dir=dynamic_repo_path,
                 logger=logger,
             )
-
-            # Save dataset
-            logger.info(f"Saving dataset to {args.output_name}/...")
-            dataset_path = dynamic_repo_path / Path(args.output_name)
-            dataset.save_to_disk(dataset_path)
-            logger.info("✓ Dataset saved")
 
             # Save report
             runtime = (datetime.now() - start_time).total_seconds()
             report_path = dynamic_repo_path / Path(f"{args.output_name}_report.txt")
             save_report(plan, report_path, runtime, logger)
+
+            # Generate Hub upload script
+            generate_hub_upload_script(
+                output_dir=dynamic_repo_path,
+                dataset_name=args.output_name,
+                vocab=args.vocab,
+                logger=logger,
+            )
 
         # Final summary
         end_time = datetime.now()
